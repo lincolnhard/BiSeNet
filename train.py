@@ -5,13 +5,15 @@ from dataset.CamVid import CamVid
 import os
 from model.build_BiSeNet import BiSeNet
 import torch
-from tensorboardX import SummaryWriter
+# from tensorboardX import SummaryWriter
+from bokeh import plotting
+from bokeh.layouts import row
 import tqdm
 import numpy as np
 from utils import poly_lr_scheduler
-from utils import reverse_one_hot, compute_global_accuracy, fast_hist, \
-    per_class_iu
+from utils import reverse_one_hot, compute_global_accuracy, fast_hist, per_class_iu
 from loss import DiceLoss
+
 
 
 def val(args, model, dataloader):
@@ -29,13 +31,13 @@ def val(args, model, dataloader):
             # get RGB predict image
             predict = model(data).squeeze()
             predict = reverse_one_hot(predict)
-            predict = np.array(predict)
+            predict = np.array(predict.cpu())
 
             # get RGB label image
             label = label.squeeze()
             if args.loss == 'dice':
                 label = reverse_one_hot(label)
-            label = np.array(label)
+            label = np.array(label.cpu())
 
             # compute per pixel accuracy
 
@@ -62,13 +64,21 @@ def val(args, model, dataloader):
 
 
 def train(args, model, optimizer, dataloader_train, dataloader_val):
-    writer = SummaryWriter(comment=''.format(args.optimizer, args.context_path))
+    plotting.output_file('learning_curve_%s_%s.html' % (args.optimizer, args.context_path))
+    fig_loss = plotting.figure(title='Loss Curve', x_axis_label='epochs', y_axis_label='loss', plot_width=600, plot_height=600)
+    fig_precision = plotting.figure(title='Precision Curve', x_axis_label='epochs', y_axis_label='precision', plot_width=600, plot_height=600)
+    fig_miou = plotting.figure(title='mIOU Curve', x_axis_label='epochs', y_axis_label='mIOU', plot_width=600, plot_height=600)
+
     if args.loss == 'dice':
         loss_func = DiceLoss()
     elif args.loss == 'crossentropy':
         loss_func = torch.nn.CrossEntropyLoss()
+
     max_miou = 0
-    step = 0
+    loss_list = []
+    epoch_x = []
+    precision_list = []
+    miou_list = []
     for epoch in range(args.num_epochs):
         lr = poly_lr_scheduler(optimizer, args.learning_rate, iter=epoch, max_iter=args.num_epochs)
         model.train()
@@ -89,28 +99,31 @@ def train(args, model, optimizer, dataloader_train, dataloader_val):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            step += 1
-            writer.add_scalar('loss_step', loss, step)
             loss_record.append(loss.item())
         tq.close()
         loss_train_mean = np.mean(loss_record)
-        writer.add_scalar('epoch/loss_epoch_train', float(loss_train_mean), epoch)
+        loss_list.append(loss_train_mean)
         print('loss for train : %f' % (loss_train_mean))
+
         if epoch % args.checkpoint_step == 0 and epoch != 0:
             if not os.path.isdir(args.save_model_path):
                 os.mkdir(args.save_model_path)
-            torch.save(model.module.state_dict(),
-                       os.path.join(args.save_model_path, 'latest_dice_loss.pth'))
+            torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'latest_dice_loss.pth'))
 
-        if epoch % args.validation_step == 0:
+        if epoch % args.validation_step == 0 or epoch == (args.num_epochs - 1):
             precision, miou = val(args, model, dataloader_val)
             if miou > max_miou:
                 max_miou = miou
-                torch.save(model.module.state_dict(),
-                           os.path.join(args.save_model_path, 'best_dice_loss.pth'))
-            writer.add_scalar('epoch/precision_val', precision, epoch)
-            writer.add_scalar('epoch/miou val', miou, epoch)
+                torch.save(model.module.state_dict(), os.path.join(args.save_model_path, 'best_dice_loss.pth'))
 
+            precision_list.append(precision)
+            miou_list.append(miou)
+            epoch_x.append(epoch)
+
+    fig_loss.line(range(len(loss_list)), loss_list, legend_label='train loss, min: %.4f' % min(loss_list), line_width=2, line_color='red')
+    fig_precision.line(epoch_x, precision_list, legend_label='precision, max: %.4f' % max(precision_list), line_width=2, line_color='blue')
+    fig_miou.line(epoch_x, miou_list, legend_label='miou, max: %.4f' % max(miou_list), line_width=2, line_color='green')
+    plotting.save(row(fig_loss, fig_precision, fig_miou))
 
 def main(params):
     # basic parameters
@@ -144,8 +157,8 @@ def main(params):
     test_path = os.path.join(args.data, 'test')
     test_label_path = os.path.join(args.data, 'test_labels')
     csv_path = os.path.join(args.data, 'class_dict.csv')
-    dataset_train = CamVid(train_path, train_label_path, csv_path, scale=(args.crop_height, args.crop_width),
-                           loss=args.loss, mode='train')
+
+    dataset_train = CamVid(train_path, train_label_path, csv_path, scale=(args.crop_height, args.crop_width), loss=args.loss, mode='train')
     dataloader_train = DataLoader(
         dataset_train,
         batch_size=args.batch_size,
@@ -153,8 +166,8 @@ def main(params):
         num_workers=args.num_workers,
         drop_last=True
     )
-    dataset_val = CamVid(test_path, test_label_path, csv_path, scale=(args.crop_height, args.crop_width),
-                         loss=args.loss, mode='test')
+
+    dataset_val = CamVid(test_path, test_label_path, csv_path, scale=(args.crop_height, args.crop_width), loss=args.loss, mode='test')
     dataloader_val = DataLoader(
         dataset_val,
         # this has to be 1
@@ -194,17 +207,18 @@ def main(params):
 
 if __name__ == '__main__':
     params = [
-        '--num_epochs', '1000',
+        '--num_epochs', '10',
         '--learning_rate', '2.5e-2',
-        '--data', '/path/to/CamVid',
+        '--data', '/mnt/data/lincoln/BiSeNet/CamVid',
         '--num_workers', '8',
         '--num_classes', '12',
-        '--cuda', '0',
-        '--batch_size', '2',  # 6 for resnet101, 12 for resnet18
+        '--cuda', '0, 1',
+        '--batch_size', '12',  # 6 for resnet101, 12 for resnet18
         '--save_model_path', './checkpoints_18_sgd',
         '--context_path', 'resnet18',  # only support resnet18 and resnet101
         '--optimizer', 'sgd',
-
+        '--loss', 'dice',
+        '--validation_step', '5'
     ]
     main(params)
 
