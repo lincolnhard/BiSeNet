@@ -40,7 +40,6 @@ class AttentionRefinementModule(torch.nn.Module):
     def forward(self, input):
         # global average pooling
         x = self.avgpool(input)
-        assert self.in_channels == x.size(1), 'in_channels and out_channels should all be {}'.format(x.size(1))
         x = self.conv(x)
         # x = self.sigmoid(self.bn(x))
         x = self.sigmoid(x)
@@ -67,7 +66,6 @@ class FeatureFusionModule(torch.nn.Module):
 
     def forward(self, input_1, input_2):
         x = torch.cat((input_1, input_2), dim=1)
-        assert self.in_channels == x.size(1), 'in_channels of ConvBlock should be {}'.format(x.size(1))
         feature = self.convblock(x)
         x = self.avgpool(feature)
 
@@ -142,9 +140,13 @@ class BiSeNet(torch.nn.Module):
         cx1 = self.attention_refinement_module1(cx1)
         cx2 = self.attention_refinement_module2(cx2)
         cx2 = torch.mul(cx2, tail)
+
         # upsampling
-        cx1 = torch.nn.functional.interpolate(cx1, size=sx.size()[-2:], mode='bilinear')
-        cx2 = torch.nn.functional.interpolate(cx2, size=sx.size()[-2:], mode='bilinear')
+        # !! hardcode here for onnx export !!
+        cx1 = torch.nn.functional.interpolate(cx1, size=[90, 120], mode='bilinear')
+        cx2 = torch.nn.functional.interpolate(cx2, size=[90, 120], mode='bilinear')
+        # cx1 = torch.nn.functional.interpolate(cx1, size=[60, 80], mode='bilinear')
+        # cx2 = torch.nn.functional.interpolate(cx2, size=[60, 80], mode='bilinear')
         cx = torch.cat((cx1, cx2), dim=1)
 
         if self.training == True:
@@ -157,7 +159,9 @@ class BiSeNet(torch.nn.Module):
         result = self.feature_fusion_module(sx, cx)
 
         # upsampling
-        result = torch.nn.functional.interpolate(result, scale_factor=8, mode='bilinear')
+        # !! hardcode here for onnx export !!
+        result = torch.nn.functional.interpolate(result, size=[720, 960], mode='bilinear')
+        # result = torch.nn.functional.interpolate(result, size=[480, 640], mode='bilinear')
         result = self.conv(result)
 
         if self.training == True:

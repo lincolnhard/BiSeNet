@@ -5,7 +5,6 @@ from dataset.CamVid import CamVid
 import os
 from model.build_BiSeNet import BiSeNet
 import torch
-# from tensorboardX import SummaryWriter
 from bokeh import plotting
 from bokeh.layouts import row
 import tqdm
@@ -207,7 +206,7 @@ def main(params):
 
 if __name__ == '__main__':
     params = [
-        '--num_epochs', '10',
+        '--num_epochs', '1000',
         '--learning_rate', '2.5e-2',
         '--data', '/mnt/data/lincoln/BiSeNet/CamVid',
         '--num_workers', '8',
@@ -218,7 +217,8 @@ if __name__ == '__main__':
         '--context_path', 'resnet18',  # only support resnet18 and resnet101
         '--optimizer', 'sgd',
         '--loss', 'dice',
-        '--validation_step', '5'
+        '--validation_step', '5',
+        '--checkpoint_step', '5'
     ]
     main(params)
 
